@@ -39,7 +39,7 @@ void WhatsAppClient::post_json(const std::string& url, const json& payload) {
     if (!res) {
         throw std::runtime_error("[WhatsApp] Falha de conexão com a Graph API");
     }
-    if (res->status != 200) {
+    if (res->status < 200 || res->status >= 300) {
         throw std::runtime_error(std::format(
             "[WhatsApp] Erro HTTP {}: {}", res->status, res->body));
     }

@@ -120,20 +120,80 @@ std::string GeminiClient::http_post(const std::string& url, const std::string& b
 // ── Parseia resposta JSON ─────────────────────────────────────
 
 ChatResponse GeminiClient::parse_response(const std::string& raw) const {
-    auto j = json::parse(raw);
+    json j;
+    try {
+        j = json::parse(raw);
+    } catch (const json::parse_error& e) {
+        throw GeminiException(std::format("Resposta JSON inválida do Gemini: {}", e.what()));
+    }
 
-    auto& candidate = j["candidates"][0];
-    std::string finish = candidate.value("finishReason", "STOP");
+    if (!j.is_object()) {
+        throw GeminiException("Resposta Gemini inválida: payload raiz não é um objeto JSON");
+    }
+
+    if (j.contains("error") && j["error"].is_object()) {
+        const auto& err = j["error"];
+        const int32_t code = err.value("code", 0);
+        const std::string msg = err.value("message", "erro desconhecido");
+        throw GeminiException(std::format("Erro retornado pela API Gemini: {}", msg), code);
+    }
+
+    const auto candidates_it = j.find("candidates");
+    if (candidates_it == j.end() || !candidates_it->is_array() || candidates_it->empty()) {
+        throw GeminiException("Resposta Gemini inválida: campo 'candidates' ausente, não-array ou vazio");
+    }
+
+    const auto& candidate = (*candidates_it)[0];
+    if (!candidate.is_object()) {
+        throw GeminiException("Resposta Gemini inválida: 'candidates[0]' não é objeto");
+    }
+
+    std::string finish = "STOP";
+    const auto finish_it = candidate.find("finishReason");
+    if (finish_it != candidate.end()) {
+        if (!finish_it->is_string()) {
+            throw GeminiException("Resposta Gemini inválida: 'finishReason' presente com tipo inesperado");
+        }
+        finish = finish_it->get<std::string>();
+    }
     if (finish == "SAFETY")
         throw SafetyFilterException("Resposta bloqueada pelo filtro de segurança do Gemini");
 
+    const auto content_it = candidate.find("content");
+    if (content_it == candidate.end() || !content_it->is_object()) {
+        throw GeminiException("Resposta Gemini inválida: campo 'content' ausente ou inválido em 'candidates[0]'");
+    }
+
+    const auto parts_it = content_it->find("parts");
+    if (parts_it == content_it->end() || !parts_it->is_array() || parts_it->empty()) {
+        throw GeminiException("Resposta Gemini inválida: campo 'content.parts' ausente, não-array ou vazio");
+    }
+
+    const auto& first_part = (*parts_it)[0];
+    if (!first_part.is_object()) {
+        throw GeminiException("Resposta Gemini inválida: 'content.parts[0]' não é objeto");
+    }
+
+    const auto text_it = first_part.find("text");
+    if (text_it == first_part.end() || !text_it->is_string()) {
+        throw GeminiException("Resposta Gemini inválida: campo 'content.parts[0].text' ausente ou inválido");
+    }
+
     ChatResponse resp;
-    resp.content       = candidate["content"]["parts"][0]["text"].get<std::string>();
+    resp.content       = text_it->get<std::string>();
     resp.finish_reason = finish;
 
-    if (j.contains("usageMetadata")) {
-        resp.input_tokens  = j["usageMetadata"].value("promptTokenCount",     0);
-        resp.output_tokens = j["usageMetadata"].value("candidatesTokenCount", 0);
+    const auto usage_it = j.find("usageMetadata");
+    if (usage_it != j.end() && usage_it->is_object()) {
+        const auto prompt_it = usage_it->find("promptTokenCount");
+        if (prompt_it != usage_it->end() && prompt_it->is_number_integer()) {
+            resp.input_tokens = prompt_it->get<int_fast32_t>();
+        }
+
+        const auto output_it = usage_it->find("candidatesTokenCount");
+        if (output_it != usage_it->end() && output_it->is_number_integer()) {
+            resp.output_tokens = output_it->get<int_fast32_t>();
+        }
     }
 
     return resp;
