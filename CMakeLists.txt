@@ -21,6 +21,11 @@ set(SOURCES
 # Como usamos header-only, removemos CPPHTTPLIB_COMPILE e deixamos inline
 
 add_executable(AlissonAsk ${SOURCES})
+target_compile_features(AlissonAsk PRIVATE cxx_std_23)
+
+if(MSVC)
+    target_compile_options(AlissonAsk PRIVATE /Zc:__cplusplus)
+endif()
 
 target_include_directories(AlissonAsk PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
